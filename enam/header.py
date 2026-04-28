@@ -2,7 +2,10 @@ import argparse
 import os, os.path as osp
 import gc
 import sys
-import resource
+try:
+    import resource
+except ModuleNotFoundError:
+    resource = None
 import platform
 import random
 import time

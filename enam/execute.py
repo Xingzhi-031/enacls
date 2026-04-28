@@ -8,7 +8,7 @@ def get_memory_usage():
 @contextlib.contextmanager
 def set_memory_limit(maximum_memory_bytes = None):
     try:
-        if maximum_memory_bytes is not None:
+        if maximum_memory_bytes is not None and resource is not None:
             _not_darwin = (not platform.uname().system == "Darwin")
             _rlimit_as = resource.getrlimit(resource.RLIMIT_AS)
             _rlimit_data = resource.getrlimit(resource.RLIMIT_DATA)
@@ -21,7 +21,7 @@ def set_memory_limit(maximum_memory_bytes = None):
                 resource.setrlimit(resource.RLIMIT_STACK, (memory_limit, _rlimit_stack[-1]))
         yield
     finally:
-        if maximum_memory_bytes is not None:
+        if maximum_memory_bytes is not None and resource is not None:
             resource.setrlimit(resource.RLIMIT_AS, _rlimit_as)
             resource.setrlimit(resource.RLIMIT_DATA, _rlimit_data)
             if _not_darwin:
@@ -36,6 +36,11 @@ def timeout_signal_handler(signum, frame):
 @contextlib.contextmanager
 def set_time_limit(seconds):
     import signal
+    has_itimer = hasattr(signal, "setitimer") and hasattr(signal, "ITIMER_REAL") and hasattr(signal, "SIGALRM")
+    if not has_itimer:
+        # Windows fallback: no hard timeout enforcement.
+        yield
+        return
     signal.setitimer(signal.ITIMER_REAL, seconds)
     signal.signal(signal.SIGALRM, timeout_signal_handler)
     try:
