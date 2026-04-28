@@ -1,6 +1,12 @@
 # ENAMEL: A Code Efficiency Benchmark
 
-[![Our paper at ICLR 2025](https://github.com/q-rz/enamel/raw/main/figures/img.shields.io%20badge%202025-ICLR-60C332.svg)](https://openreview.net/forum?id=suz4utPr9Y) [![Our paper on arXiv](https://github.com/q-rz/enamel/raw/main/figures/img.shields.io%20badge%202406.06647-arXiv-B31B1B.svg)](https://arxiv.org/abs/2406.06647) [![Our dataset on HuggingFace](https://github.com/q-rz/enamel/raw/main/figures/img.shields.io%20badge%20enamel-HuggingFace-FF9D0B.svg)](https://huggingface.co/datasets/q-rz/enamel) [![Our Python library on PyPI](https://github.com/q-rz/enamel/raw/main/figures/img.shields.io%20badge%20enam-PyPI-006DAD.svg)](https://pypi.org/project/enam/)
+> **Attribution Notice (for this fork)**
+>
+> This repository is based on the original ENAMEL project and paper by Ruizhong Qiu et al.
+> I use their open-source code and benchmark for reproduction and comparative experiments only.
+> The ENAMEL method, dataset, and paper contributions belong to the original authors.
+
+[![Original paper at ICLR 2025](https://github.com/q-rz/enamel/raw/main/figures/img.shields.io%20badge%202025-ICLR-60C332.svg)](https://openreview.net/forum?id=suz4utPr9Y) [![Original paper on arXiv](https://github.com/q-rz/enamel/raw/main/figures/img.shields.io%20badge%202406.06647-arXiv-B31B1B.svg)](https://arxiv.org/abs/2406.06647) [![Original dataset on HuggingFace](https://github.com/q-rz/enamel/raw/main/figures/img.shields.io%20badge%20enamel-HuggingFace-FF9D0B.svg)](https://huggingface.co/datasets/q-rz/enamel) [![Original Python library on PyPI](https://github.com/q-rz/enamel/raw/main/figures/img.shields.io%20badge%20enam-PyPI-006DAD.svg)](https://pypi.org/project/enam/)
 
 [Getting Started](#getting-started) | [Library Usage](#library-usage) | [LLM Leaderboard](#llm-leaderboard) | [Acknowledgements](#acknowledgements)
 
