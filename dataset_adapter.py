@@ -87,16 +87,32 @@ class ENAMELAdapter(DatasetAdapter):
         return prompt_template.format(prompt=task["prompt"])
 
     def extract_solution(self, task: Dict, completion: str) -> str:
-        """Strip thinking blocks then combine IMPORT_PKG + completion."""
+        """Build executable code as: IMPORT_PKG + function definition + body."""
         import re
-        # Strip <think>...</think> tagged blocks
+        import textwrap
+
+        # 1) Remove chain-of-thought / markdown wrappers.
         completion = re.sub(r"<think>.*?</think>", "", completion, flags=re.DOTALL)
-        # Strip plain-text thinking preambles (e.g. "Thinking Process: ...")
-        # Keep only from the first def / import / code line
-        code_start = re.search(r"^(def |import |from |class |\w)", completion, re.MULTILINE)
-        if code_start:
-            completion = completion[code_start.start():]
-        return IMPORT_PKG + "\n" + completion.strip()
+        completion = completion.replace("```python", "").replace("```", "")
+        completion = completion.strip()
+
+        entry_def = f"def {task['entry_point']}"
+        if entry_def in completion:
+            # Completion already contains a full function; keep only from target def.
+            start = completion.find(entry_def)
+            normalized = completion[start:].rstrip()
+            return IMPORT_PKG + "\n" + normalized
+
+        # 2) Base-model case: completion is function body only.
+        #    Explicitly insert task['prompt'] between imports and completion.
+        body = textwrap.dedent(completion).strip("\n")
+        indented_body = "\n".join(
+            ("    " + line) if line.strip() else ""
+            for line in body.splitlines()
+        )
+        prompt = task["prompt"].rstrip("\n")
+        normalized = prompt if not indented_body else (prompt + "\n" + indented_body)
+        return IMPORT_PKG + "\n" + normalized
 
 
 # ---------------------------------------------------------------------------
