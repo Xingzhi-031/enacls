@@ -50,12 +50,7 @@ class DatasetAdapter(ABC):
 # ENAMEL adapter
 # ---------------------------------------------------------------------------
 
-_ENAMEL_PROMPT_TEMPLATE = """\
-Complete the following Python function. Output only the complete function \
-implementation and nothing else.
-
-{prompt}
-"""
+_ENAMEL_PROMPT_TEMPLATE = "{prompt}"
 
 
 class ENAMELAdapter(DatasetAdapter):
@@ -92,7 +87,15 @@ class ENAMELAdapter(DatasetAdapter):
         return prompt_template.format(prompt=task["prompt"])
 
     def extract_solution(self, task: Dict, completion: str) -> str:
-        """Combine IMPORT_PKG + the raw completion as the solution string."""
+        """Strip thinking blocks then combine IMPORT_PKG + completion."""
+        import re
+        # Strip <think>...</think> tagged blocks
+        completion = re.sub(r"<think>.*?</think>", "", completion, flags=re.DOTALL)
+        # Strip plain-text thinking preambles (e.g. "Thinking Process: ...")
+        # Keep only from the first def / import / code line
+        code_start = re.search(r"^(def |import |from |class |\w)", completion, re.MULTILINE)
+        if code_start:
+            completion = completion[code_start.start():]
         return IMPORT_PKG + "\n" + completion.strip()
 
 
