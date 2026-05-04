@@ -6,9 +6,10 @@ Provides a unified interface through the adapter pattern.
 
 from __future__ import annotations
 
-import json
+import ast
+import re
+import textwrap
 from abc import ABC, abstractmethod
-from pathlib import Path
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -86,33 +87,99 @@ class ENAMELAdapter(DatasetAdapter):
     def format_prompt(self, task: Dict, prompt_template: str) -> str:
         return prompt_template.format(prompt=task["prompt"])
 
-    def extract_solution(self, task: Dict, completion: str) -> str:
-        """Build executable code as: IMPORT_PKG + function definition + body."""
-        import re
-        import textwrap
+    @staticmethod
+    def _extract_code_block(completion: str) -> str:
+        """Extract the last fenced Python block, fallback to raw text."""
+        matches = re.findall(r"```python\s*(.*?)```", completion, flags=re.DOTALL)
+        if matches:
+            return matches[-1].strip()
+        matches = re.findall(r"```\s*(.*?)```", completion, flags=re.DOTALL)
+        if matches:
+            return matches[-1].strip()
+        return completion.strip()
 
-        # 1) Remove chain-of-thought / markdown wrappers.
+    @staticmethod
+    def _trim_after_target_function(code: str, entry_def: str) -> str:
+        """Keep only the target function block and drop runaway continuations."""
+        start = code.find(entry_def)
+        if start < 0:
+            return code
+        lines = code[start:].splitlines()
+        kept: list[str] = []
+        for idx, line in enumerate(lines):
+            stripped = line.strip()
+            is_top_level = bool(line) and (line[0] not in (" ", "\t"))
+            if idx > 0 and is_top_level and (
+                stripped.startswith("def ")
+                or stripped.startswith("class ")
+                or stripped.startswith("if __name__")
+            ):
+                break
+            kept.append(line)
+        return "\n".join(kept).strip()
+
+    @staticmethod
+    def _normalize_body(body_text: str) -> str:
+        """Normalize body-only completion into a compilable function body."""
+        raw_lines = body_text.replace("\t", "    ").splitlines()
+        start_idx = 0
+        code_prefixes = (
+            "for ", "while ", "if ", "elif ", "else:", "try:", "except ",
+            "with ", "return ", "raise ", "assert ", "from ", "import ",
+            "def ", "class ", "@", "pass", "break", "continue", "#",
+        )
+        for i, line in enumerate(raw_lines):
+            stripped = line.strip()
+            if stripped and (stripped.startswith(code_prefixes) or "=" in stripped):
+                start_idx = i
+                break
+        dedented = textwrap.dedent("\n".join(raw_lines[start_idx:])).strip("\n")
+        if not dedented:
+            return ""
+
+        normalized_lines: list[str] = []
+        indent_level = 1
+        for line in dedented.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                normalized_lines.append("")
+                continue
+            if stripped.startswith(("elif ", "else:", "except ", "finally:")):
+                indent_level = max(1, indent_level - 1)
+            normalized_lines.append((" " * (indent_level * 4)) + stripped)
+            if stripped.endswith(":") and not stripped.startswith("#"):
+                indent_level += 1
+            elif stripped.startswith(("return ", "break", "continue", "pass", "raise ")):
+                indent_level = max(1, indent_level - 1)
+        return "\n".join(normalized_lines).strip("\n")
+
+    def extract_solution(self, task: Dict, completion: str) -> str:
+        """Build executable code as: imports + target function body."""
         completion = re.sub(r"<think>.*?</think>", "", completion, flags=re.DOTALL)
-        completion = completion.replace("```python", "").replace("```", "")
+        completion = self._extract_code_block(completion)
         completion = completion.strip()
 
         entry_def = f"def {task['entry_point']}"
-        if entry_def in completion:
-            # Completion already contains a full function; keep only from target def.
-            start = completion.find(entry_def)
-            normalized = completion[start:].rstrip()
-            return IMPORT_PKG + "\n" + normalized
-
-        # 2) Base-model case: completion is function body only.
-        #    Explicitly insert task['prompt'] between imports and completion.
-        body = textwrap.dedent(completion).strip("\n")
-        indented_body = "\n".join(
-            ("    " + line) if line.strip() else ""
-            for line in body.splitlines()
-        )
         prompt = task["prompt"].rstrip("\n")
-        normalized = prompt if not indented_body else (prompt + "\n" + indented_body)
-        return IMPORT_PKG + "\n" + normalized
+        if entry_def in completion:
+            normalized = self._trim_after_target_function(completion, entry_def)
+        else:
+            body = self._normalize_body(completion)
+            normalized = prompt if not body else (prompt + "\n" + body)
+
+        full_code = IMPORT_PKG + "\n" + normalized.strip() + "\n"
+        try:
+            ast.parse(full_code)
+        except SyntaxError:
+            # Final fallback: keep only stripped body lines under the prompt.
+            body_fallback = textwrap.dedent(completion).strip("\n")
+            body_fallback = "\n".join(
+                ("    " + line.strip()) if line.strip() else ""
+                for line in body_fallback.splitlines()
+            )
+            normalized = prompt if not body_fallback else (prompt + "\n" + body_fallback)
+            full_code = IMPORT_PKG + "\n" + normalized.strip() + "\n"
+        return full_code
 
 
 # ---------------------------------------------------------------------------
