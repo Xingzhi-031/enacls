@@ -61,12 +61,21 @@ def main() -> None:
                         help="Nucleus sampling probability.")
     parser.add_argument("--subset", default=None,
                         help="Comma-separated problem indices to run (default: all).")
+    parser.add_argument(
+        "--force-full-function",
+        action="store_true",
+        help="Prefix prompts with strict instruction to output one full function.",
+    )
     parser.add_argument("--output", "-o", default="samples/generated.json",
                         help="Output JSON path.")
     args = parser.parse_args()
 
     # Load dataset
-    adapter = get_adapter(args.dataset, csv_path=args.dataset_csv)
+    adapter = get_adapter(
+        args.dataset,
+        csv_path=args.dataset_csv,
+        force_full_function=args.force_full_function,
+    )
     print(f"Dataset: {adapter.dataset_name}")
     dataset = adapter.load_dataset()
 

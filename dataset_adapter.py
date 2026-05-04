@@ -52,6 +52,11 @@ class DatasetAdapter(ABC):
 # ---------------------------------------------------------------------------
 
 _ENAMEL_PROMPT_TEMPLATE = "{prompt}"
+_FULL_FUNCTION_INSTRUCTION = (
+    "Return only ONE complete Python function.\n"
+    "Use exactly the given function signature.\n"
+    "Do not output imports, tests, explanations, markdown, or extra functions.\n\n"
+)
 
 
 class ENAMELAdapter(DatasetAdapter):
@@ -63,8 +68,13 @@ class ENAMELAdapter(DatasetAdapter):
 
     dataset_name = "enamel"
 
-    def __init__(self, csv_path: str = "dataset/enamel.csv") -> None:
+    def __init__(
+        self,
+        csv_path: str = "dataset/enamel.csv",
+        force_full_function: bool = False,
+    ) -> None:
         self.csv_path = csv_path
+        self.force_full_function = force_full_function
 
     def load_dataset(self, path: Optional[str] = None) -> List[Dict]:
         p = path or self.csv_path
@@ -85,7 +95,10 @@ class ENAMELAdapter(DatasetAdapter):
         return _ENAMEL_PROMPT_TEMPLATE
 
     def format_prompt(self, task: Dict, prompt_template: str) -> str:
-        return prompt_template.format(prompt=task["prompt"])
+        base_prompt = prompt_template.format(prompt=task["prompt"])
+        if self.force_full_function:
+            return _FULL_FUNCTION_INSTRUCTION + base_prompt
+        return base_prompt
 
     @staticmethod
     def _extract_code_block(completion: str) -> str:
