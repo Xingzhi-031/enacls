@@ -157,7 +157,6 @@ class ENAMELAdapter(DatasetAdapter):
         """Build executable code as: imports + target function body."""
         completion = re.sub(r"<think>.*?</think>", "", completion, flags=re.DOTALL)
         completion = self._extract_code_block(completion)
-        completion = completion.strip()
 
         entry_def = f"def {task['entry_point']}"
         prompt = task["prompt"].rstrip("\n")
