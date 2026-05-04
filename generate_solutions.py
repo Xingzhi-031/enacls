@@ -104,6 +104,7 @@ def main() -> None:
         top_p=args.top_p,
         max_tokens=args.max_tokens,
         n=1,  # one completion per prompt entry (we already replicated prompts)
+        stop=["if __name__", "\nprint(", "\n# Test", "\nassert ", "\n# Example"],
     )
 
     # Generate in batches
