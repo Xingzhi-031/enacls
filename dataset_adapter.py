@@ -68,13 +68,8 @@ class ENAMELAdapter(DatasetAdapter):
 
     dataset_name = "enamel"
 
-    def __init__(
-        self,
-        csv_path: str = "dataset/enamel.csv",
-        force_full_function: bool = False,
-    ) -> None:
+    def __init__(self, csv_path: str = "dataset/enamel.csv") -> None:
         self.csv_path = csv_path
-        self.force_full_function = force_full_function
 
     def load_dataset(self, path: Optional[str] = None) -> List[Dict]:
         p = path or self.csv_path
@@ -95,18 +90,12 @@ class ENAMELAdapter(DatasetAdapter):
         return _ENAMEL_PROMPT_TEMPLATE
 
     def format_prompt(self, task: Dict, prompt_template: str) -> str:
-        base_prompt = prompt_template.format(prompt=task["prompt"])
-        if self.force_full_function:
-            return _FULL_FUNCTION_INSTRUCTION + base_prompt
-        return base_prompt
+        return _FULL_FUNCTION_INSTRUCTION + prompt_template.format(prompt=task["prompt"])
 
     @staticmethod
     def _extract_code_block(completion: str) -> str:
-        """Extract the last fenced Python block, fallback to raw text."""
+        """Extract last fenced Python block; fallback to raw text."""
         matches = re.findall(r"```python\s*(.*?)```", completion, flags=re.DOTALL)
-        if matches:
-            return matches[-1].strip()
-        matches = re.findall(r"```\s*(.*?)```", completion, flags=re.DOTALL)
         if matches:
             return matches[-1].strip()
         return completion.strip()
@@ -167,29 +156,27 @@ class ENAMELAdapter(DatasetAdapter):
         return "\n".join(normalized_lines).strip("\n")
 
     def extract_solution(self, task: Dict, completion: str) -> str:
-        """Build executable code as: imports + target function body."""
+        """Simple extraction: use fenced Python code, then ensure target function."""
         completion = re.sub(r"<think>.*?</think>", "", completion, flags=re.DOTALL)
         completion = self._extract_code_block(completion)
 
         entry_def = f"def {task['entry_point']}"
         prompt = task["prompt"].rstrip("\n")
         if entry_def in completion:
-            normalized = self._trim_after_target_function(completion, entry_def)
+            normalized = completion[completion.find(entry_def):].rstrip()
         else:
-            body = self._normalize_body(completion)
-            normalized = prompt if not body else (prompt + "\n" + body)
+            body = textwrap.dedent(completion).strip("\n")
+            indented_body = "\n".join(
+                ("    " + line) if line.strip() else ""
+                for line in body.splitlines()
+            )
+            normalized = prompt if not indented_body else (prompt + "\n" + indented_body)
 
         full_code = IMPORT_PKG + "\n" + normalized.strip() + "\n"
         try:
             ast.parse(full_code)
         except SyntaxError:
-            # Final fallback: keep only stripped body lines under the prompt.
-            body_fallback = textwrap.dedent(completion).strip("\n")
-            body_fallback = "\n".join(
-                ("    " + line.strip()) if line.strip() else ""
-                for line in body_fallback.splitlines()
-            )
-            normalized = prompt if not body_fallback else (prompt + "\n" + body_fallback)
+            normalized = prompt
             full_code = IMPORT_PKG + "\n" + normalized.strip() + "\n"
         return full_code
 
