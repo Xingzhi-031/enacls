@@ -74,7 +74,6 @@ def _pick_best_candidate(
             best_code = code
     return best_code, best_t
 
-
 def _better(
     a: tuple[str, tuple[int, float]],
     b: tuple[str, tuple[int, float]],
