@@ -55,7 +55,8 @@ _ENAMEL_PROMPT_TEMPLATE = "{prompt}"
 _FULL_FUNCTION_INSTRUCTION = (
     "Return only ONE complete Python function.\n"
     "Use exactly the given function signature.\n"
-    "Do not output imports, tests, explanations, markdown, or extra functions.\n\n"
+    "Do not output imports, tests, explanations, markdown, or extra functions.\n"
+    "Do not output docstring-only or pass. Function body must include executable logic and at least one return statement.\n\n"
 )
 
 
