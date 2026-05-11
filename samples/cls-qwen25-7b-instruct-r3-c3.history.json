@@ -1,0 +1,17 @@
+[
+  {
+    "round": 1,
+    "mean_selected_runtime_ms": Infinity,
+    "mean_best_so_far_runtime_ms": Infinity
+  },
+  {
+    "round": 2,
+    "mean_selected_runtime_ms": Infinity,
+    "mean_best_so_far_runtime_ms": Infinity
+  },
+  {
+    "round": 3,
+    "mean_selected_runtime_ms": Infinity,
+    "mean_best_so_far_runtime_ms": Infinity
+  }
+]
