@@ -107,9 +107,14 @@ def main() -> None:
     parser.add_argument("--batch-size", "-b", type=int, default=8, help="Problems per vLLM batch (not K).")
     parser.add_argument("--tensor-parallel-size", "-tp", type=int, default=1)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9)
-    parser.add_argument("--max-tokens", type=int, default=1024)
+    parser.add_argument("--max-tokens", type=int, default=2048)
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--top-p", type=float, default=0.95)
+    parser.add_argument("--protocol", choices=["pure", "l4e"], default="pure",
+                        help="Prompting protocol (same semantics as generate_solutions.py).")
+    parser.add_argument("--mode", choices=["auto", "chat", "completion"], default="auto",
+                        help="Inference mode. 'chat' applies the tokenizer's chat template "
+                             "(required for Instruct/Chat models). 'completion' uses raw text.")
     parser.add_argument(
         "--tests",
         type=str,
@@ -129,7 +134,7 @@ def main() -> None:
     refine_rounds = max(3, args.refine_rounds)
     k = max(3, args.candidates_per_round)
 
-    adapter = get_adapter(args.dataset, csv_path=args.dataset_csv)
+    adapter = get_adapter(args.dataset, csv_path=args.dataset_csv, protocol=args.protocol)
     dataset = adapter.load_dataset()
     problemset = set(PROBLEMSET)
     subset = _parse_subset(args.subset)
@@ -160,6 +165,25 @@ def main() -> None:
         )
     hardness = np.array(evaluator.hardness, dtype=np.float64)
 
+    # Decide inference mode (mirrors generate_solutions.py).
+    mode = args.mode
+    if mode == "auto":
+        mid = args.model.lower()
+        if any(tok in mid for tok in ("instruct", "chat", "-it", "/it-")):
+            mode = "chat"
+        else:
+            mode = "completion"
+    print(f"Protocol: {args.protocol}")
+    print(f"Inference mode: {mode}")
+
+    # Load tokenizer for chat-template wrapping (Instruct/Chat models *must*
+    # go through apply_chat_template; see generate_solutions.py for details).
+    tokenizer = None
+    if mode == "chat":
+        from transformers import AutoTokenizer
+        print("Loading tokenizer for chat template...")
+        tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
+
     from vllm import LLM, SamplingParams
 
     print(f"Loading model: {args.model}")
@@ -171,12 +195,13 @@ def main() -> None:
         dtype="auto",
     )
 
-    sampling_params = SamplingParams(
-        temperature=args.temperature,
-        top_p=args.top_p,
-        max_tokens=args.max_tokens,
-        n=k,
-        stop=[
+    # Stop tokens follow the same rule as generate_solutions.py:
+    # chat mode lets the model end naturally (EOS); completion mode stops on
+    # the first "next top-level def/class/test".
+    if mode == "chat":
+        stop_tokens: list[str] = []
+    else:
+        stop_tokens = [
             "\n\ndef ",
             "\nclass ",
             "if __name__",
@@ -184,8 +209,28 @@ def main() -> None:
             "\n# Test",
             "\nassert ",
             "\n# Example",
-        ],
+            "\n```",
+        ]
+
+    sampling_params = SamplingParams(
+        temperature=args.temperature,
+        top_p=args.top_p,
+        max_tokens=args.max_tokens,
+        n=k,
+        stop=stop_tokens,
     )
+
+    def _wrap_chat(prompts: list[str]) -> list[str]:
+        if mode != "chat" or tokenizer is None:
+            return prompts
+        return [
+            tokenizer.apply_chat_template(
+                [{"role": "user", "content": p}],
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            for p in prompts
+        ]
 
     prompt_template = adapter.get_prompt_template()
     solutions: dict[str, list[str]] = {str(t["problem_id"]): [] for t in refine_tasks}
@@ -215,8 +260,9 @@ def main() -> None:
             prompts_r.append(base)
             tasks_r.append(task)
 
-        for i in tqdm(range(0, len(prompts_r), args.batch_size), desc=desc):
-            batch_p = prompts_r[i : i + args.batch_size]
+        wrapped_prompts_r = _wrap_chat(prompts_r)
+        for i in tqdm(range(0, len(wrapped_prompts_r), args.batch_size), desc=desc):
+            batch_p = wrapped_prompts_r[i : i + args.batch_size]
             batch_t = tasks_r[i : i + args.batch_size]
             outs = llm.generate(batch_p, sampling_params)
             for out, task in zip(outs, batch_t):
