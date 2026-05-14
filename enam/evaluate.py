@@ -146,6 +146,11 @@ __accepted = __check(__input, __answer, __output)
         timeout = self.timeout_factor * refs.ref_max
         effs = []
         elapsed_list = []
+        # If self.tests[i] is empty, the for-loop never assigns j; line below would raise UnboundLocalError.
+        j = -1
+        level_break = False
+        if not self.tests[i]:
+            return False, self.zero_effs(), elapsed_list
         for j, (size, tests) in enumerate(self.tests[i]):
             n_reps = self.n_reps[j]
             level_elapsed = []
