@@ -61,12 +61,28 @@ def main() -> None:
                         help="Nucleus sampling probability.")
     parser.add_argument("--subset", default=None,
                         help="Comma-separated problem indices to run (default: all).")
+    parser.add_argument("--protocol", choices=["pure", "l4e"], default="pure",
+                        help="Prompting protocol. 'pure' = raw ENAMEL prompt "
+                             "(official leaderboard setup, default). "
+                             "'l4e' = prepend the L4E 'Return only ONE complete "
+                             "Python function...' instruction.")
+    parser.add_argument("--mode", choices=["auto", "chat", "completion"], default="auto",
+                        help="Inference mode. 'chat' applies the tokenizer's chat "
+                             "template (required for Instruct/Chat models). "
+                             "'completion' feeds raw text (for base models). "
+                             "'auto' (default) picks chat when the model id "
+                             "contains 'instruct' / 'chat' / '-it'.")
     parser.add_argument("--output", "-o", default="samples/generated.json",
                         help="Output JSON path.")
     args = parser.parse_args()
 
     # Load dataset
-    adapter = get_adapter(args.dataset, csv_path=args.dataset_csv)
+    adapter = get_adapter(
+        args.dataset,
+        csv_path=args.dataset_csv,
+        protocol=args.protocol,
+    )
+    print(f"Protocol: {args.protocol}")
     print(f"Dataset: {adapter.dataset_name}")
     dataset = adapter.load_dataset()
 
@@ -78,14 +94,43 @@ def main() -> None:
 
     prompt_template = adapter.get_prompt_template()
 
+    # Decide inference mode (chat vs raw completion).
+    mode = args.mode
+    if mode == "auto":
+        mid = args.model.lower()
+        if any(tok in mid for tok in ("instruct", "chat", "-it", "/it-")):
+            mode = "chat"
+        else:
+            mode = "completion"
+    print(f"Inference mode: {mode}")
+
     # Build all prompts (num_solutions copies per task for diverse sampling)
-    prompts: list[str] = []
+    raw_prompts: list[str] = []
     task_indices: list[int] = []  # which task each prompt belongs to
     for task in dataset:
         p = adapter.format_prompt(task, prompt_template)
         for _ in range(args.num_solutions):
-            prompts.append(p)
+            raw_prompts.append(p)
             task_indices.append(task["problem_id"])
+
+    # Apply chat template if needed. Instruct/Chat models *must* go through
+    # apply_chat_template, otherwise they degenerate into HumanEval-style
+    # "docstring -> doctest -> assert" continuations and never write a body
+    # (observed on Qwen2.5-Coder-14B-Instruct in the L4E run).
+    if mode == "chat":
+        from transformers import AutoTokenizer
+        print("Applying tokenizer chat template...")
+        tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
+        prompts: list[str] = []
+        for p in raw_prompts:
+            chat_text = tokenizer.apply_chat_template(
+                [{"role": "user", "content": p}],
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            prompts.append(chat_text)
+    else:
+        prompts = raw_prompts
 
     # Load vLLM
     from vllm import LLM, SamplingParams
@@ -99,12 +144,16 @@ def main() -> None:
         dtype="auto",
     )
 
-    sampling_params = SamplingParams(
-        temperature=args.temperature,
-        top_p=args.top_p,
-        max_tokens=args.max_tokens,
-        n=1,  # one completion per prompt entry (we already replicated prompts)
-        stop=[
+    # Stop tokens differ by mode:
+    # - chat: let the model emit a fenced code block followed by prose; the
+    #   adapter's extractor picks the last fenced block. Heavy stop tokens
+    #   would chop the response in the middle of the block.
+    # - completion: stop on the first "next top-level def/class/test" so we
+    #   keep only the body of the target function.
+    if mode == "chat":
+        stop_tokens: list[str] = []
+    else:
+        stop_tokens = [
             "\n\ndef ",
             "\nclass ",
             "if __name__",
@@ -112,7 +161,15 @@ def main() -> None:
             "\n# Test",
             "\nassert ",
             "\n# Example",
-        ],
+            "\n```",
+        ]
+
+    sampling_params = SamplingParams(
+        temperature=args.temperature,
+        top_p=args.top_p,
+        max_tokens=args.max_tokens,
+        n=1,  # one completion per prompt entry (we already replicated prompts)
+        stop=stop_tokens,
     )
 
     # Generate in batches
