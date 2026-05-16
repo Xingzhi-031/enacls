@@ -53,6 +53,13 @@ def main() -> None:
                         help="Number of GPUs for tensor parallelism.")
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.9,
                         help="GPU memory fraction for vLLM (0.0-1.0).")
+    parser.add_argument(
+        "--max-model-len",
+        type=int,
+        default=None,
+        help="vLLM max_model_len (default: model config, often 32768). "
+             "Lower values save KV cache (e.g. 8192 for 14B on single A100).",
+    )
     parser.add_argument("--max-tokens", type=int, default=1024,
                         help="Max new tokens per completion.")
     parser.add_argument("--temperature", type=float, default=0.2,
@@ -139,13 +146,17 @@ def main() -> None:
     from vllm import LLM, SamplingParams
 
     print(f"Loading model: {args.model}")
-    llm = LLM(
+    llm_kwargs: dict = dict(
         model=args.model,
         tensor_parallel_size=args.tensor_parallel_size,
         gpu_memory_utilization=args.gpu_memory_utilization,
         trust_remote_code=True,
         dtype="auto",
     )
+    if args.max_model_len is not None:
+        llm_kwargs["max_model_len"] = args.max_model_len
+        print(f"max_model_len={args.max_model_len}")
+    llm = LLM(**llm_kwargs)
 
     # Stop tokens differ by mode:
     # - chat: let the model emit a fenced code block followed by prose; the
