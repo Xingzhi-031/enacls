@@ -81,6 +81,22 @@ _FULL_FUNCTION_INSTRUCTION = (
     "\n"
 )
 
+# Minimal single-turn instruct prompt (matches CLS eval/export_qwen_baseline.py).
+# Raw ENAMEL ``pure`` + chat still fails on some Instruct checkpoints (e.g.
+# deepseek-coder-6.7b-instruct): the model echoes docstrings instead of bodies.
+_INSTRUCT_WRAP_TEMPLATE = """You are a Python programmer. Implement the function described below.
+
+Task (verbatim from the benchmark):
+-----
+{prompt}
+-----
+
+Return ONLY the implementation in a single Python markdown code block.
+The implementation must define a top-level function named exactly
+`{entry_point}`. Include any imports it relies on. Do not print, do
+not add example or test code, do not write anything outside the
+fenced code block."""
+
 
 # ---------------------------------------------------------------------------
 # Code extraction / normalization helpers (ported from the L4E bridge)
@@ -389,6 +405,34 @@ def _normalize_solution(prompt: str, entry_point: str, completion: str) -> str:
     return full
 
 
+def _minimal_solution(prompt: str, entry_point: str, completion: str) -> str:
+    """Conservative extraction for ablation: fenced block only, no ast salvage or IMPORT_PKG."""
+    completion = re.sub(
+        r"<think>.*?</think>", "", completion, flags=re.DOTALL
+    )
+    code = _extract_code_block(completion)
+    if not code.strip():
+        code = completion.strip()
+    target_def = f"def {entry_point}("
+    if target_def in code:
+        trimmed = _trim_target_function_block(code, entry_point)
+        if trimmed:
+            code = trimmed
+    return code.strip() + "\n"
+
+
+def _raw_solution(prompt: str, entry_point: str, completion: str) -> str:
+    """Weakest ablation: append model text after the ENAMEL prompt with no structured extraction."""
+    del entry_point  # unused; kept for a uniform signature with other extractors
+    completion = re.sub(
+        r"<think>.*?</think>", "", completion, flags=re.DOTALL
+    )
+    text = completion.strip()
+    if text:
+        return prompt.rstrip() + "\n" + text + "\n"
+    return prompt.rstrip() + "\n"
+
+
 # ---------------------------------------------------------------------------
 # ENAMEL adapter
 # ---------------------------------------------------------------------------
@@ -406,12 +450,16 @@ class ENAMELAdapter(DatasetAdapter):
     protocol:
         Prompting protocol used by :meth:`format_prompt`.
 
-        - ``"pure"`` (default): feed the raw ENAMEL prompt verbatim. This is
-          the official ENAMEL-leaderboard setup — useful for direct
-          comparison against published numbers.
-        - ``"l4e"``: prepend the L4E-style "Return only ONE complete Python
-          function..." instruction. Useful when reproducing the LLM4EFFI
-          *Instruct* baseline.
+        - ``"pure"`` (default): feed the raw ENAMEL prompt verbatim.
+        - ``"l4e"``: prepend the L4E-style function-only instruction.
+        - ``"instruct-wrap"``: fenced-code instruct template; use with chat mode
+          when ``pure`` yields docstring-only stubs on an Instruct checkpoint.
+    extract_mode:
+        Post-processing in :meth:`extract_solution`.
+
+        - ``"full"`` (default): ast alignment, salvage, and ``IMPORT_PKG`` header.
+        - ``"minimal"``: last fenced block + trim to ``entry_point``; no ast/import header.
+        - ``"raw"``: ``prompt`` + completion text, no code-block parsing.
     """
 
     dataset_name = "enamel"
@@ -420,13 +468,21 @@ class ENAMELAdapter(DatasetAdapter):
         self,
         csv_path: str = "dataset/enamel.csv",
         protocol: str = "pure",
+        extract_mode: str = "full",
     ) -> None:
         self.csv_path = csv_path
-        if protocol not in {"pure", "l4e"}:
+        if protocol not in {"pure", "l4e", "instruct-wrap"}:
             raise ValueError(
-                f"Unknown protocol {protocol!r}. Expected 'pure' or 'l4e'."
+                f"Unknown protocol {protocol!r}. "
+                "Expected 'pure', 'l4e', or 'instruct-wrap'."
+            )
+        if extract_mode not in {"full", "minimal", "raw"}:
+            raise ValueError(
+                f"Unknown extract_mode {extract_mode!r}. "
+                "Expected 'full', 'minimal', or 'raw'."
             )
         self.protocol = protocol
+        self.extract_mode = extract_mode
 
     def load_dataset(self, path: Optional[str] = None) -> List[Dict]:
         p = path or self.csv_path
@@ -447,15 +503,26 @@ class ENAMELAdapter(DatasetAdapter):
         return _ENAMEL_PROMPT_TEMPLATE
 
     def format_prompt(self, task: Dict, prompt_template: str) -> str:
+        if self.protocol == "instruct-wrap":
+            return _INSTRUCT_WRAP_TEMPLATE.format(
+                prompt=task["prompt"],
+                entry_point=task["entry_point"],
+            )
         body = prompt_template.format(prompt=task["prompt"])
         if self.protocol == "l4e":
             return _FULL_FUNCTION_INSTRUCTION + body
         return body
 
     def extract_solution(self, task: Dict, completion: str) -> str:
+        prompt = task["prompt"]
+        entry_point = task["entry_point"]
+        if self.extract_mode == "minimal":
+            return _minimal_solution(prompt, entry_point, completion)
+        if self.extract_mode == "raw":
+            return _raw_solution(prompt, entry_point, completion)
         return _normalize_solution(
-            prompt=task["prompt"],
-            entry_point=task["entry_point"],
+            prompt=prompt,
+            entry_point=entry_point,
             completion=completion,
         )
 

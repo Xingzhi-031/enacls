@@ -23,11 +23,26 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 from tqdm import tqdm
 
 from dataset_adapter import get_adapter
+
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def _strip_thinking(text: str) -> str:
+    return _THINK_RE.sub("", text).strip()
+
+
+def _normalize_tokenizer_artifacts(text: str) -> str:
+    """vLLM DeepSeek/Qwen .text may contain U+0120/U+010A instead of space/newline."""
+    for old, new in (("\u0120", " "), ("\u010a", "\n"), ("\u2581", " ")):
+        if old in text:
+            text = text.replace(old, new)
+    return text
 
 
 def _parse_subset(value: str) -> list[int] | None:
@@ -68,11 +83,13 @@ def main() -> None:
                         help="Nucleus sampling probability.")
     parser.add_argument("--subset", default=None,
                         help="Comma-separated problem indices to run (default: all).")
-    parser.add_argument("--protocol", choices=["pure", "l4e", "l4e-pipe"], default="pure",
+    parser.add_argument("--protocol", choices=["pure", "l4e", "instruct-wrap", "l4e-pipe"], default="pure",
                         help="Prompting protocol. 'pure' = raw ENAMEL prompt "
                              "(official leaderboard setup, default). "
                              "'l4e' = prepend the L4E 'Return only ONE complete "
                              "Python function...' instruction (prompt-only ablation). "
+                             "'instruct-wrap' = Qwen-baseline fenced-code instruction "
+                             "(use with --mode chat when pure yields docstring-only stubs). "
                              "'l4e-pipe' = full L4E planning + coding pipeline "
                              "(task_desc -> 5 algos -> algo2code x5 -> LLM-vote).")
     parser.add_argument("--l4e-pipe-knowledge", action="store_true",
@@ -81,11 +98,19 @@ def main() -> None:
                              "concatenate the tips into the algo->code prompt "
                              "(~2x more LLM calls per task).")
     parser.add_argument("--mode", choices=["auto", "chat", "completion"], default="auto",
-                        help="Inference mode. 'chat' applies the tokenizer's chat "
-                             "template (required for Instruct/Chat models). "
-                             "'completion' feeds raw text (for base models). "
-                             "'auto' (default) picks chat when the model id "
-                             "contains 'instruct' / 'chat' / '-it'.")
+                        help="Inference mode. 'auto' (default): chat for Instruct/Chat "
+                             "checkpoints (name contains instruct/chat/-it), else "
+                             "completion for base models. 'chat' = apply_chat_template; "
+                             "'completion' = raw prompt continuation (ablation on "
+                             "Instruct models — usually much weaker).")
+    parser.add_argument(
+        "--extract",
+        choices=["full", "minimal", "raw"],
+        default="full",
+        help="How to turn model text into demo.py samples. 'full' (default): ast "
+             "salvage + IMPORT_PKG. 'minimal': last fenced block only (ablation). "
+             "'raw': prompt + completion with no parsing (weakest ablation).",
+    )
     parser.add_argument("--output", "-o", default="samples/generated.json",
                         help="Output JSON path.")
     args = parser.parse_args()
@@ -99,8 +124,10 @@ def main() -> None:
         args.dataset,
         csv_path=args.dataset_csv,
         protocol=adapter_protocol,
+        extract_mode=args.extract,
     )
     print(f"Protocol: {args.protocol}")
+    print(f"Extract: {args.extract}")
     print(f"Dataset: {adapter.dataset_name}")
     dataset = adapter.load_dataset()
 
@@ -134,11 +161,20 @@ def main() -> None:
         tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
 
         def _apply_chat(text: str) -> str:
-            return tokenizer.apply_chat_template(
-                [{"role": "user", "content": text}],
-                tokenize=False,
-                add_generation_prompt=True,
-            )
+            messages = [{"role": "user", "content": text}]
+            try:
+                return tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    enable_thinking=False,
+                )
+            except TypeError:
+                return tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
 
         chat_template_fn = _apply_chat
 
@@ -209,7 +245,8 @@ def main() -> None:
             completions = pipeline.run(dataset)
             for task, completion in zip(dataset, completions):
                 pid = str(task["problem_id"])
-                solution = adapter.extract_solution(task, completion)
+                raw = _strip_thinking(_normalize_tokenizer_artifacts(completion))
+                solution = adapter.extract_solution(task, raw)
                 solutions[pid].append(solution)
     else:
         raw_prompts: list[str] = []
@@ -237,7 +274,8 @@ def main() -> None:
         for prompt_idx, completion in enumerate(all_completions):
             pid = str(task_indices[prompt_idx])
             task = next(t for t in dataset if str(t["problem_id"]) == pid)
-            solution = adapter.extract_solution(task, completion)
+            raw = _strip_thinking(_normalize_tokenizer_artifacts(completion))
+            solution = adapter.extract_solution(task, raw)
             solutions[pid].append(solution)
 
     # Save
